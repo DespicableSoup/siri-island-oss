@@ -1,0 +1,746 @@
+<!-- V6.6 -->
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Siri Island · iOS 27 复刻</title>
+<style>
+  :root { --s: 1; --py: 0px; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #000; color: #f2f2f4; overflow: hidden;
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+
+  /* 手机：内部一律用 pt(393×852)，整体按 --s 缩放 */
+  /* 手机顶部居中，下半截被面板和窗口裁掉，只露出灵动岛附近，竖屏录屏时 Siri 足够大 */
+  .phone {
+    position: absolute; left: 50%; top: var(--py); translate: -50% 0;
+    width: calc(393px * var(--s)); height: calc(852px * var(--s));
+    border-radius: calc(56px * var(--s)); overflow: hidden; background: #000;
+    box-shadow: 0 0 0 calc(9px * var(--s)) #17171a, 0 0 0 calc(10.5px * var(--s)) #34343a,
+                0 40px 90px rgba(0,0,0,.6);
+  }
+  .phone.frameless { box-shadow: none; }
+  .phone canvas { position: absolute; left: 0; top: 0; width: 100%; display: block; }
+  .pt { position: absolute; left: 0; top: 0; width: 393px; height: 852px;
+        transform: scale(var(--s)); transform-origin: 0 0; pointer-events: none; }
+
+  .looking, .answer, .handle { translate: 0 var(--dy, 0px); }
+  .looking {
+    position: absolute; left: 104px; top: 44px; height: 22px; line-height: 22px;
+    font-size: 17px; font-weight: 500; letter-spacing: -.2px; white-space: nowrap;
+    color: transparent; -webkit-background-clip: text; background-clip: text;
+    background-image: linear-gradient(100deg, rgba(255,255,255,.42) 30%, #fff 50%, rgba(255,255,255,.42) 70%);
+    background-size: 260% 100%; animation: shimmer 2.2s linear infinite;
+    opacity: 0; filter: blur(6px); transition: opacity .28s, filter .28s;
+  }
+  .looking.on { opacity: 1; filter: blur(0); transition-delay: .16s; }
+  @keyframes shimmer { from { background-position: 130% 0; } to { background-position: -130% 0; } }
+
+  .answer {
+    position: absolute; left: 48px; top: 46px; width: 306px;
+    font-size: 18.5px; line-height: 22.6px; font-weight: 500; letter-spacing: -.25px; color: #fff;
+    opacity: 0; filter: blur(9px); transition: opacity .22s, filter .22s;
+  }
+  .answer.on { opacity: 1; filter: blur(0); transition: opacity .5s .22s, filter .5s .22s; }
+  .handle {
+    position: absolute; left: 171.5px; top: 201px; width: 50px; height: 4.5px; border-radius: 3px;
+    background: rgba(255,255,255,.92); opacity: 0; transition: opacity .2s;
+  }
+  .handle.on { opacity: 1; transition: opacity .4s .3s; }
+
+  /* 控制面板 */
+  /* 控制面板放在底部，第一排是演示状态，居中 */
+  .panel {
+    position: fixed; left: 24px; right: 24px; bottom: 24px; z-index: 2;
+    max-height: 38vh; overflow-y: auto; scrollbar-width: none;
+    background: #000; border-radius: 28px; padding: 18px 26px 22px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .panel .hint { margin: 0; text-align: center; font-size: 12px; color: #6f6f78; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  button {
+    font: inherit; font-size: 13px; color: #e9e9ee; background: #1b1b20; border: 0;
+    padding: 8px 14px; border-radius: 999px; cursor: pointer; transition: background .15s, color .15s;
+  }
+  button:hover { background: #26262d; }
+  button.on { background: #f2f2f4; color: #000; }
+  button.main { background: #2f6bff; color: #fff; padding: 10px 18px; }
+  button.main:hover { background: #4a7fff; }
+  label { display: grid; grid-template-columns: 74px 1fr 34px; align-items: center; gap: 10px;
+          font-size: 12px; color: #a3a3ab; }
+  label output { text-align: right; font-variant-numeric: tabular-nums; color: #6f6f78; }
+  input[type=range] { width: 100%; accent-color: #f2f2f4; height: 3px; }
+  .sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); column-gap: 32px; row-gap: 9px; }
+  .sliders h2, .sliders #tabs { grid-column: 1 / -1; }
+  .sliders h2 { margin: 8px 0 0; font-size: 11px; font-weight: 600; color: #5d5d66; letter-spacing: .6px; }
+  body.clean .panel { display: none; }
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <canvas id="gl"></canvas>
+  <div class="pt" id="overlay">
+    <div class="looking" id="looking">Looking into it</div>
+    <div class="answer" id="answer">I could not confirm the exact weather forecast for today in Guangzhou. However, the city generally experiences warm and humid conditions with a good number of sunny days.</div>
+    <div class="handle" id="handle"></div>
+  </div>
+</div>
+
+<div class="panel" id="panel">
+  <div class="row" id="states">
+    <button class="main" id="auto">▶ 自动演示</button>
+    <button data-s="idle" class="on">待机</button>
+    <button data-s="listen">聆听</button>
+    <button data-s="think">思考</button>
+    <button data-s="work">查询</button>
+    <button data-s="answer">回答</button>
+  </div>
+  <div class="row">
+    <button id="mic">麦克风</button>
+    <button id="sim" class="on">模拟说话</button>
+    <button id="bg">背景：纯黑</button>
+    <button id="upload">上传屏幕</button>
+    <button id="frameBtn" class="on">手机边框</button>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+  <p class="hint">空格播放整段 · H 隐藏面板 · 手机截图可以直接拖到屏幕上</p>
+  <div class="sliders" id="sliders"></div>
+  <div class="row"><button id="copy">复制参数</button><button id="reset">恢复默认</button></div>
+</div>
+
+<script>
+const VERT = `#version 300 es
+in vec2 position;
+void main(){ gl_Position = vec4(position, 0.0, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+
+uniform sampler2D uBg;
+uniform vec2  uRes;
+uniform float uPtPerPx; // 画布像素 → pt；画布只覆盖手机露出来的上半截
+uniform float uTime;
+uniform float uPhase;   // 光带相位，随音量加速，在 JS 里积分
+uniform float uLevel;   // 0..1 音量
+uniform vec2  uC;       // 形状中心 (pt)
+uniform vec2  uH;       // 形状半尺寸 (pt)
+uniform float uR;       // 圆角
+uniform float uWater;   // 黑→玻璃的分界，占形状高度的比例
+uniform float uGlass;   // 0 = 全黑，1 = 下半透出
+uniform float uTmin;    // 玻璃最透处剩余的烟色
+uniform float uStrand;  // 光带开关
+uniform float uSy;      // 光带基线 y (pt)
+uniform float uSw;      // 光带占形状半宽的比例
+uniform float uBow;     // 光带向下弯的弧度 (pt)
+uniform float uDots;    // 点阵圆环开关
+uniform float uGather;  // 0→1：小球向中间收拢并消失
+uniform vec3  uRing;    // 圆环 x, y, 半径
+uniform float uShadow;
+uniform float uRefr;
+uniform float uGlow;
+uniform float uThick;     // 静息粗细
+uniform float uThickLoud; // 说话时增加的粗细
+uniform float uCount;     // 条数
+uniform float uAmp;       // 说话时的起伏高度 (pt)
+uniform float uWav;       // 波数
+uniform float uHalo;      // 色块外的柔光
+uniform float uLobe;      // 色块横向宽度
+uniform float uSoft;      // 色块边缘柔和
+uniform float uMix;       // 重叠处颜色混合：0 = 各自成块，1 = 像光一样相加
+uniform float uWhite;     // 整体偏白（回答态的光条）
+uniform float uAmpK;      // 起伏倍率（回答态贴着底边，几乎不起伏）
+uniform float uTip;       // 触边收细：越靠近玻璃边缘色带越薄
+uniform float uRimRefr;   // 玻璃边缘对色带的折射
+uniform float uRainbow;   // 彩色程度：0 = 只有橙蓝白，1 = 全彩
+uniform float uThickK;    // 厚度倍率（回答态是一条薄光条）
+uniform float uTaper;     // 两端收尖
+uniform float uHue;       // 沿长度的颜色跨度
+uniform float uSat;       // 饱和度
+uniform float uCore;      // 白芯过曝
+
+out vec4 fragColor;
+
+const vec2 PT = vec2(393.0, 852.0);
+uniform vec2 uIslandC;  // 灵动岛本体中心，跟着“灵动岛下移”走
+const vec2 ISLAND_H = vec2(63.0, 18.5);
+
+float sdBox(vec2 p, vec2 c, vec2 h, float r) {
+  vec2 q = abs(p - c) - h + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+float shape(vec2 p) { return sdBox(p, uC, uH, uR); }
+
+vec3 pal(float t) {
+  const vec3 c[6] = vec3[6](
+    vec3(1.00, 0.20, 0.22), vec3(1.00, 0.70, 0.08), vec3(0.25, 0.90, 0.40),
+    vec3(0.15, 0.85, 0.92), vec3(0.12, 0.42, 1.00), vec3(0.72, 0.34, 1.00));
+  float s = fract(t) * 6.0;
+  int i = int(floor(s));
+  return mix(c[i], c[(i + 1) % 6], fract(s));
+}
+
+// 安静时只有橙、蓝两色，颜色沿光带缓慢左右漂移
+vec3 calm(float u, float fi) {
+  const vec3 orange = vec3(1.00, 0.58, 0.22);
+  const vec3 blue   = vec3(0.22, 0.62, 1.00);
+  return mix(orange, blue, 0.5 + 0.5 * sin(u * 2.5 + uTime * 0.7 + fi * 3.14159));
+}
+
+// 每条是一块实心的色带：沿长度有一个会漂移的色块包络，色带之间上下交错，
+// 叠加处过曝成白色。安静时所有色带压成一条细线。
+vec3 strands(vec2 p, float s) {
+  float u = (p.x - uC.x) / (uH.x * uSw);
+  if (abs(u) >= 1.0) return vec3(0.0);
+  float env = pow(max(1.0 - u * u, 0.0), uTaper);
+  float e = uLevel;
+  float loud = smoothstep(0.03, 0.30, e);
+  float py = p.y - (uSy + uBow * (0.5 - u * u));
+  // s 是屏幕上这个像素离玻璃边缘的距离；按它收薄，折射取样的位置变了也不影响，所以没有接缝
+  float tip = 1.0 - uTip * (1.0 - smoothstep(0.0, 14.0, s));
+
+  vec3 acc = vec3(0.0), light = vec3(0.0);
+  float wsum = 0.0, asum = 0.0;
+  for (int i = 0; i < 8; i++) {
+    float fi = float(i);
+    if (fi >= uCount) break;
+    float gate = 0.04 + 0.3 * fi / uCount; // 第 3 条起随音量逐条出现
+    float wgt = i < 2 ? 1.0 : smoothstep(gate, gate + 0.18, e);
+    float ph = fi * 1.7;
+    float freq = (1.2 + fi * 0.3) * uWav;
+    float spd = 0.8 + fi * 0.45;
+    float w = sin(u * freq * 1.6 + uPhase * spd + ph) * 0.60
+            + sin(u * freq * 2.3 - uPhase * spd * 0.7 + ph * 1.7) * 0.40;
+
+    float cx = 0.75 * sin(uPhase * (0.35 + 0.11 * fi) + fi * 2.4);
+    float lobe = mix(1.0, exp(-pow((u - cx) / uLobe, 2.0)), loud);
+
+    float y = w * (0.4 + uAmp * e * uAmpK) * env;
+    float h = (uThick * 0.6 + uThickLoud * e * lobe * uThickK) * (0.25 + 0.75 * env) * tip;
+    float d = abs(py - y) / max(h, 1e-3);
+    float a = 1.0 - smoothstep(1.0 - uSoft, 1.0 + uSoft, d);
+    a += uHalo * 0.6 * exp(-d * d * 0.35);
+
+    vec3 c = mix(calm(u, 0.0), pal(fi / uCount + u * uHue + uTime * 0.02), smoothstep(0.06, 0.40, e) * uRainbow);
+    a *= mix(1.0, lobe, 0.6) * wgt * smoothstep(0.0, 0.12, env);
+    float k = a * a * a; // 立方加权：每个位置由最强的那条定颜色，色块之间边界清楚
+    acc += c * k; wsum += k; asum += a;
+    light += c * a;
+  }
+  // 颜色取主导色带，亮度看总量；只有叠得很厚的地方才过曝成白
+  // 重叠处按 uMix 混入加色（红+蓝出品红、红+绿出黄），不再是硬切
+  vec3 col = mix(acc / max(wsum, 1e-4), 1.0 - exp(-light * 1.5), uMix);
+  col = mix(col, vec3(1.0), uWhite * smoothstep(0.15, 0.9, asum));
+  float gray = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  col = clamp(mix(vec3(gray), col, uSat), 0.0, 1.0);
+  col = mix(col, vec3(1.0), clamp((asum - 1.25) * 0.5 * uCore, 0.0, 0.92));
+  return col * (1.0 - exp(-asum * uGlow * 1.6));
+}
+
+// 思考态：一圈发光小点，依次呼吸。每个点是实心亮芯 + 一圈光晕；
+// 红蓝两个通道沿圆环径向错开一点，光晕边缘就带上色散。
+vec3 dotsGlow(vec2 p) {
+  float R = uRing.z * uDots;
+  vec2 rel = p - uRing.xy;
+  float rl = length(rel);
+  vec2 dir = rl > 1e-3 ? rel / rl : vec2(0.0);
+  vec2 off = dir * uRing.z * 0.045;
+  vec3 f = vec3(0.0);
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    // 收拢：每个球出发的早晚、绕的弧度、偏的方向都不一样，途中互相粘连
+    float rnd = fract(sin(fi * 12.9898 + 4.1) * 43758.5453);
+    float rnd2 = fract(rnd * 7.31);
+    float gi = smoothstep(0.0, 1.0, clamp(uGather * 1.7 - rnd * 0.7, 0.0, 1.0));
+    float a = fi * 1.0472 - 1.5708 + gi * (rnd2 - 0.5) * 2.6;
+    vec2 c = uRing.xy + R * (1.0 - 0.93 * gi) * vec2(cos(a), sin(a))
+           + R * 0.3 * sin(gi * 3.14159) * vec2(rnd - 0.5, rnd2 - 0.5);
+    // 位置不动，围成一个圈；大小的起伏沿着圆环一个接一个传下去
+    float breath = 0.5 + 0.5 * cos(6.2832 * (uTime * 0.425 - fi / 6.0));
+    float s = uRing.z * 0.29 * (0.55 + 0.6 * breath * breath);
+    s *= (1.0 + 0.3 * sin(gi * 3.14159)) * (1.0 - smoothstep(0.7, 1.0, uGather));
+    vec2 d0 = p - c;
+    vec2 dr = d0 - off, db = d0 + off;
+    f += s * s / (vec3(dot(dr, dr), dot(d0, d0), dot(db, db)) + 0.05);
+  }
+  vec3 core = smoothstep(vec3(0.6), vec3(2.2), f);
+  vec3 halo = 1.0 - exp(-f * 0.75);
+  return (core + halo * (1.0 - core) * vec3(0.92, 0.96, 1.0)) * (1.0 - smoothstep(0.85, 1.0, uGather));
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) * uPtPerPx;
+  float d = shape(p);
+
+  vec3 bg = texture(uBg, p / PT).rgb;
+  float ds = shape(p - vec2(0.0, 6.0));
+  bg *= 1.0 - uShadow * 0.26 * exp(-max(ds, 0.0) / 10.0);
+
+  float aa = fwidth(d);
+  float mask = 1.0 - smoothstep(-aa, aa, d);
+  vec3 col = bg;
+
+  if (mask > 0.0) {
+    float s = -d;
+    float B = min(26.0, min(uH.x, uH.y) * 0.9);
+    float k = pow(1.0 - clamp(s / B, 0.0, 1.0), 3.0);
+    vec2 e = vec2(0.5, 0.0);
+    vec2 n = normalize(vec2(shape(p + e.xy) - shape(p - e.xy),
+                            shape(p + e.yx) - shape(p - e.yx)) + 1e-5);
+
+    // 整体轻微放大 + 边缘把外面的内容压进来，三通道错开一点做色散
+    float A = 14.0 * uRefr * uGlass;
+    vec2 base = uC + (p - uC) / (1.0 + 0.12 * uGlass * uRefr);
+    vec3 rf;
+    rf.r = texture(uBg, (base + n * A * k * 1.12) / PT).r;
+    rf.g = texture(uBg, (base + n * A * k) / PT).g;
+    rf.b = texture(uBg, (base + n * A * k * 0.88) / PT).b;
+
+    // 上黑下透的烟色渐变
+    float yb = (p.y - (uC.y - uH.y)) / (2.0 * uH.y);
+    float g = clamp((yb - uWater) / max(1.0 - uWater, 1e-3), 0.0, 1.0);
+    float tint = mix(1.0, mix(0.80, uTmin, pow(g, 0.8)), smoothstep(uWater - 0.08, uWater + 0.10, yb));
+    tint = mix(1.0, tint, uGlass);
+
+    vec3 c = rf * (1.0 - tint);
+    c *= 1.0 - 0.35 * k * uGlass;
+
+    // 灵动岛本体保持纯黑，水滴的黑略微抬起一点
+    float isl = sdBox(p, uIslandC, ISLAND_H, 18.5);
+    c += vec3(0.03) * smoothstep(0.0, 8.0, isl) * tint * uGlass;
+
+    // 玻璃边缘高光，主要在下半
+    float low = smoothstep(uWater - 0.1, 1.0, yb);
+    float rim = smoothstep(1.3, 0.0, abs(s - 0.8));
+    c += rim * (0.2 + 0.8 * low) * 0.55 * uGlass;
+
+    // 色带。靠近玻璃边缘时改从更靠里、更靠近色带的位置取样，
+    // 于是色带的颜色被边缘“兜住”并沿着边缘拉开；三个通道取样距离不同，带出色散
+    vec3 st;
+    float bend = k * uRimRefr * uRefr;
+    if (bend > 0.002) {
+      vec2 q = p - n * 22.0 * bend;
+      // 只在色带高度附近的那一小段边缘起作用，离得远的边缘不受影响
+      float pull = min(bend * 0.8, 0.9) * exp(-abs(p.y - uSy) / 13.0);
+      vec2 qr = p - n * 22.0 * bend * 0.8, qb = p - n * 22.0 * bend * 1.2;
+      q.y = mix(q.y, uSy, pull); qr.y = mix(qr.y, uSy, pull * 0.85); qb.y = mix(qb.y, uSy, min(pull * 1.15, 0.95));
+      st = vec3(strands(qr, s).r, strands(q, s).g, strands(qb, s).b) * (1.0 + 0.6 * bend);
+    } else {
+      st = strands(p, s);
+    }
+    c += st * uStrand;
+
+    c += dotsGlow(p) * uDots;
+
+    col = mix(bg, c, mask);
+  }
+  fragColor = vec4(col, 1.0);
+}`;
+
+// ---------- 参数 ----------
+// [id, 名称, 最小, 最大, 步长, 默认]
+// 色带参数分两套：聆听一套、回答一套，互不影响
+// [id, 名称, 最小, 最大, 步长, 聆听默认, 回答默认]
+const BAND = [
+  ['色带'],
+  ['sCount',     '条数',     1,    8,   1,     3,    3],
+  ['sPos',       '垂直位置', 0,    1,   0.005, 0.5,  1],
+  ['sSpan',      '横向宽度', 0.3,  1,   0.01,  1,    0.86],
+  ['sThick',     '厚度·静息', 0.3, 6,   0.01,  1.5,  1.6],
+  ['sThickLoud', '厚度·说话', 0,   60,  0.1,   15.2, 15.7],
+  ['sLobe',      '色块宽度', 0.15, 2,   0.01,  0.92, 0.86],
+  ['sSoft',      '边缘模糊', 0.05, 1.5, 0.01,  0.18, 0.26],
+  ['sAmp',       '起伏高度', 0,    24,  0.1,   6.1,  2.6],
+  ['sWav',       '波数',     0.2,  2.5, 0.01,  1,    0.6],
+  ['sSpeed',     '速度',     0,    3,   0.01,  2.64, 0.8],
+  ['sTaper',     '两端收尖', 0.3,  4,   0.01,  3.3,  0.7],
+  ['sBow',       '弧度',     -4,   14,  0.1,   4.9,  0],
+  ['sRimRefr',   '边缘折射', 0,    2,   0.01,  1.17, 0],
+  ['sTip',       '触边收细', 0,    1,   0.01,  0.33, 0],
+  ['发光与颜色'],
+  ['sRainbow',   '彩色程度', 0,    1,   0.01,  0.97, 0],
+  ['sWhite',     '整体偏白', 0,    1,   0.01,  0,    0.55],
+  ['sMix',       '颜色混合', 0,    1,   0.01,  0.73, 1],
+  ['sGlow',      '亮度',     0.2,  4,   0.01,  1.76, 3.09],
+  ['sCore',      '白芯过曝', 0,    3,   0.01,  0,    0],
+  ['sHalo',      '外圈柔光', 0,    2,   0.01,  0.71, 0.95],
+  ['sSat',       '饱和度',   0,    2.5, 0.01,  1.01, 1.02],
+  ['sHue',       '颜色跨度', 0,    1,   0.01,  0.18, 1]
+];
+const OTHER = [
+  ['其他'],
+  ['sLevel',     '音量',     0,    1,   0.01,  0],
+  ['sRefr',      '折射',     0,    2,   0.01,  1.74],
+  ['sIsland',    '灵动岛下移', 0,  120, 1,     0],
+  ['画面'],
+  ['sPhoneW',    '手机大小', 0.3,  1.6, 0.01,  0.56],
+  ['sPhoneY',    '手机位置', -0.3, 0.6, 0.01,  0.14]
+];
+const SET_NAMES = ['聆听', '回答'];
+const defaults = i => Object.fromEntries(BAND.filter(p => p.length > 1).map(p => [p[0], p[5 + i]]));
+const SETS = [defaults(0), defaults(1)];
+let editSet = 0;
+const row = p => p.length === 1 ? `<h2>${p[0]}</h2>` :
+  `<label>${p[1]}<input type="range" id="${p[0]}" min="${p[2]}" max="${p[3]}" step="${p[4]}" value="${p[5]}"><output></output></label>`;
+sliders.innerHTML =
+  `<div class="row" id="tabs">${SET_NAMES.map((n, i) => `<button data-set="${i}">${n}参数</button>`).join('')}</div>` +
+  BAND.map(row).join('') + OTHER.map(row).join('');
+
+// ---------- 状态 ----------
+// w/h/r/top: 形状 (pt)；water/glass/tmin: 玻璃；strand/sy/sw/bow: 光带；dots/rx/rr: 圆环
+const STATES = {
+  idle:   { set: 0, w: 126, h: 37,  r: 18.5, top: 11, water: 1.0,  glass: 0,   tmin: 0.12, strand: 0, sy: 0.50,  sw: 0.90, bowK: 1, white: 0,    ampK: 1,    thickK: 1,    bulge: 0, dots: 0, rx: 30, rr: 14, shadow: 0 },
+  listen: { set: 0, w: 164, h: 126, r: 58,   top: 4,  water: 0.50, glass: 1,   tmin: 0.12, strand: 1, sy: 0.50,  sw: 0.90, bowK: 1, white: 0,    ampK: 1,    thickK: 1,    bulge: 1, dots: 0, rx: 30, rr: 14, shadow: 1 },
+  think:  { set: 0, w: 251, h: 63,  r: 31.5, top: 11, water: 0.66, glass: 0.7, tmin: 0.30, strand: 0, sy: 0.50,  sw: 0.90, bowK: 1, white: 0,    ampK: 1,    thickK: 1,    bulge: 0, dots: 1, rx: 32, rr: 14, shadow: 0.6 },
+  work:   { set: 1, w: 369, h: 86,  r: 43,   top: 12, water: 0.62, glass: 0.9, tmin: 0.22, strand: 0, sy: 0.955, sw: 0.80, bowK: 0, white: 0.40, ampK: 0.12, thickK: 0.32, bulge: 0, dots: 1, rx: 45, rr: 17, shadow: 0.8 },
+  answer: { set: 1, w: 369, h: 200, r: 40,   top: 12, water: 0.74, glass: 1,   tmin: 0.18, strand: 1, sy: 0.955, sw: 0.80, bowK: 0, white: 0.40, ampK: 0.12, thickK: 0.32, bulge: 0, dots: 0, rx: 45, rr: 17, shadow: 1 }
+};
+// 进入某个状态时，各参数错开的起始时间 (ms)：先长形状，再透玻璃，最后亮光
+const DELAYS = {
+  idle:   { w: 60, h: 60, r: 60, top: 60 },
+  listen: { w: 40, r: 40, water: 110, glass: 110, tmin: 110, strand: 190 },
+  think:  { w: 80, h: 80, r: 80, top: 80, dots: 220 },
+  work:   {},
+  answer: { strand: 380 }
+};
+const SHAPE_KEYS = new Set(['w', 'h', 'r', 'top', 'rx', 'rr']);
+const SNAP_KEYS = new Set(['set', 'sy', 'sw', 'bowK', 'white', 'ampK', 'thickK']); // 光带位置不做过渡，只在光带熄灭时切换
+
+const cur = {}, vel = {}, target = {};
+for (const k in STATES.idle) { cur[k] = target[k] = STATES.idle[k]; vel[k] = 0; }
+
+let state = 'idle', timers = [];
+const GATHER_MS = 520;      // 小球收拢到消失的时长
+let gatherAt = -1, gather = 0; // gatherAt: 开始收拢的时刻 (ms)，-1 表示没在收拢
+function setState(name) {
+  timers.forEach(clearTimeout); timers = [];
+  state = name;
+  // 找到答案：小球先收拢消失，卡片等它收得差不多了再展开
+  const hold = name === 'answer' && cur.dots > 0.5 ? GATHER_MS - 90 : 0;
+  gatherAt = hold ? performance.now() : -1;
+  if (!hold) gather = 0;
+  const S = STATES[name], D = DELAYS[name];
+  // 光带亮着时不能直接换位置：先熄灭，换好再亮
+  const relight = cur.strand > 0.05 && S.strand > 0 && cur.set !== S.set;
+  if (relight) target.strand = 0;
+  for (const k in S) {
+    const snap = SNAP_KEYS.has(k);
+    const apply = () => { target[k] = S[k]; if (snap) cur[k] = S[k]; };
+    if (hold && k === 'dots') continue; // 收拢结束时再归零，见 frame()
+    let ms = (D[k] || 0) + hold;
+    if (relight && (snap || k === 'strand')) ms = Math.max(ms, 240);
+    ms ? timers.push(setTimeout(apply, ms)) : apply();
+  }
+  document.querySelectorAll('#states button').forEach(b => b.classList.toggle('on', b.dataset.s === name));
+  if (name === 'listen') showSet(0); else if (name === 'answer') showSet(1);
+  looking.classList.toggle('on', name === 'work');
+  const text = () => { answer.classList.toggle('on', name === 'answer'); handle.classList.toggle('on', name === 'answer'); };
+  hold ? timers.push(setTimeout(text, hold)) : text();
+}
+
+function stepSprings(dt) {
+  for (const k in cur) {
+    if (SNAP_KEYS.has(k)) continue;
+    const shape = SHAPE_KEYS.has(k);
+    const stiff = shape ? 320 : 130, damp = shape ? 26 : 23;
+    vel[k] += (stiff * (target[k] - cur[k]) - damp * vel[k]) * dt;
+    cur[k] += vel[k] * dt;
+  }
+}
+
+// ---------- 音量 ----------
+let level = 0, phase = 0, micOn = false, simOn = true, analyser = null, buf = null;
+async function toggleMic() {
+  if (micOn) { micOn = false; mic.classList.remove('on'); return; }
+  try {
+    if (!analyser) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ac = new AudioContext();
+      analyser = ac.createAnalyser(); analyser.fftSize = 1024;
+      ac.createMediaStreamSource(stream).connect(analyser);
+      buf = new Float32Array(analyser.fftSize);
+    }
+    micOn = true; simOn = false;
+    mic.classList.add('on'); sim.classList.remove('on');
+  } catch (err) { mic.textContent = '麦克风不可用'; }
+}
+function readLevel(t) {
+  if (state === 'answer') return 0.30 + 0.20 * Math.sin(t * 2.3) * Math.sin(t * 0.83) + 0.08 * Math.sin(t * 6.1);
+  if (state !== 'listen') return 0;
+  if (autoLoud) return 1;
+  if (micOn) {
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.min(1, Math.sqrt(sum / buf.length) * 7);
+  }
+  if (simOn) {
+    const syll = Math.max(0, Math.sin(t * 7.1) + Math.sin(t * 11.3) * 0.6 + Math.sin(t * 2.3) * 0.5);
+    const gate = Math.sin(t * 0.9 + 1.0) > -0.35 ? 1 : 0;
+    return Math.min(1, syll * 0.45 * gate);
+  }
+  return +sLevel.value;
+}
+
+// ---------- WebGL ----------
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+function compile(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'position');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+const U = {};
+for (const n of ['uBg','uRes','uPtPerPx','uTime','uPhase','uLevel','uC','uH','uR','uWater','uGlass','uTmin','uStrand',
+                 'uSy','uSw','uBow','uDots','uRing','uShadow','uRefr','uGlow','uThick',
+                 'uThickLoud','uCount','uAmp','uWav','uHalo','uLobe','uSoft','uMix','uWhite','uAmpK','uThickK','uRainbow','uRimRefr','uGather','uTip','uIslandC','uTaper','uHue','uSat','uCore'])
+  U[n] = gl.getUniformLocation(prog, n);
+
+// 背景取自录屏，把原画面里的灵动岛/胶囊抹掉：每行取两列干净的像素 (sample) 横向插值填平
+const BGS = {
+  // 不内置任何背景：默认纯黑，用户自己上传截图
+};
+const textures = {};
+function loadBg(key) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'), x = c.getContext('2d');
+      if (BGS[key].cover) {
+        // 壁纸比例和屏幕不同：按 393×852 居中裁切铺满，避免被拉伸
+        c.width = 786; c.height = 1704;
+        const sc = Math.max(c.width / img.width, c.height / img.height), w = img.width * sc, h = img.height * sc;
+        x.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+      } else {
+        c.width = img.width; c.height = img.height; x.drawImage(img, 0, 0);
+      }
+      if (BGS[key].patch) {
+      const [x0f, x1f, y0f, y1f] = BGS[key].patch;
+      const x0 = Math.round(x0f * c.width), x1 = Math.round(x1f * c.width);
+      const y0 = Math.round(y0f * c.height), y1 = Math.round(y1f * c.height);
+      const sl = Math.round(BGS[key].sample[0] * c.width), sr = Math.round(BGS[key].sample[1] * c.width);
+      const id = x.getImageData(0, y0, c.width, y1 - y0), w = id.width, px = id.data;
+      for (let r = 0; r < id.height; r++) {
+        const a = (r * w + sl) * 4, b = (r * w + sr) * 4;
+        for (let i = x0; i < x1; i++) {
+          const t = (i - sl) / (sr - sl), o = (r * w + i) * 4;
+          const keep = Math.max(0, (r / id.height - 0.97) / 0.03); // 底部羽化回原图
+          for (let ch = 0; ch < 3; ch++) {
+            const fill = px[a + ch] + (px[b + ch] - px[a + ch]) * t;
+            px[o + ch] = fill + (px[o + ch] - fill) * keep;
+          }
+        }
+      }
+      x.putImageData(id, 0, y0);
+      }
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      textures[key] = tex; resolve();
+    };
+    img.src = BGS[key].src;
+  });
+}
+let bgKey = 'black';
+
+// 手机宽度 = 窗口宽 × 手机大小，顶部距窗口 = 窗口高 × 手机位置。
+// 画布只画手机露出来的部分（面板以上），手机放很大也不会多渲染看不见的像素
+let ptPerPx = 1;
+function resize() {
+  const W = innerWidth, H = innerHeight;
+  const s = W * +sPhoneW.value / 393, top = H * +sPhoneY.value;
+  const root = document.documentElement.style;
+  root.setProperty('--s', s); root.setProperty('--py', top + 'px');
+  const bottom = document.body.classList.contains('clean') ? H : panel.getBoundingClientRect().top;
+  const visH = Math.max(1, Math.min(852 * s, bottom - top));
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  canvas.style.height = visH / s / 852 * 100 + '%';
+  canvas.width = Math.round(393 * s * dpr); canvas.height = Math.max(1, Math.round(visH * dpr));
+  ptPerPx = 1 / (s * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+// 竖屏窗口默认把手机放得更大
+function layoutDefaults() {
+  const portrait = innerHeight > innerWidth;
+  sPhoneW.value = portrait ? 0.96 : 0.56; sPhoneY.value = portrait ? 0.06 : 0.14;
+  syncOut(sPhoneW); syncOut(sPhoneY);
+}
+addEventListener('resize', resize);
+
+let last = 0;
+function frame(ms) {
+  requestAnimationFrame(frame);
+  const t = ms / 1000, dt = Math.min(0.033, t - last || 0.016); last = t;
+  for (let i = 0; i < 2; i++) stepSprings(dt / 2);
+  if (gatherAt >= 0) {
+    gather = Math.min(1, (ms - gatherAt) / GATHER_MS);
+    if (gather >= 1) { gatherAt = -1; gather = 0; cur.dots = target.dots = 0; vel.dots = 0; }
+  }
+
+  const raw = readLevel(t);
+  level += (raw - level) * (raw > level ? 0.35 : 0.09);
+  const B = SETS[cur.set];
+  phase += dt * (0.35 + 1.3 * level) * B.sSpeed;
+  if (state === 'listen' && (micOn || simOn || autoLoud)) sLevel.value = level, syncOut(sLevel);
+
+  // 说话时水滴略微鼓胀
+  const w = cur.w + level * 10 * cur.bulge, h = Math.max(cur.h + level * 4 * cur.bulge, 8);
+  const dy = +sIsland.value, top = cur.top + dy; // 整个灵动岛（形状、光带、小球、文字）一起下移
+  const hx = w / 2, hy = h / 2, cx = 196.5, cy = top + hy;
+  gl.uniform2f(U.uIslandC, 196.5, 29.5 + dy);
+  overlay.style.setProperty('--dy', dy + 'px');
+
+  gl.uniform1i(U.uBg, 0);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, textures[bgKey]);
+  gl.uniform2f(U.uRes, canvas.width, canvas.height);
+  gl.uniform1f(U.uPtPerPx, ptPerPx);
+  gl.uniform1f(U.uTime, t);
+  gl.uniform1f(U.uPhase, phase);
+  gl.uniform1f(U.uLevel, level);
+  gl.uniform2f(U.uC, cx, cy);
+  gl.uniform2f(U.uH, hx, hy);
+  gl.uniform1f(U.uR, Math.min(Math.max(cur.r, 1), hx, hy));
+  gl.uniform1f(U.uWater, cur.water);
+  gl.uniform1f(U.uGlass, Math.max(0, Math.min(1, cur.glass)));
+  gl.uniform1f(U.uTmin, cur.tmin);
+  gl.uniform1f(U.uStrand, Math.max(0, cur.strand));
+  gl.uniform1f(U.uSy, top + h * B.sPos);
+  gl.uniform1f(U.uSw, B.sSpan);
+  gl.uniform1f(U.uBow, B.sBow);
+  gl.uniform1f(U.uDots, Math.max(0, Math.min(1, cur.dots)));
+  gl.uniform1f(U.uGather, gather);
+  gl.uniform3f(U.uRing, cx - hx + cur.rx, cy, cur.rr);
+  gl.uniform1f(U.uShadow, Math.max(0, cur.shadow));
+  gl.uniform1f(U.uRefr, +sRefr.value);
+  gl.uniform1f(U.uGlow, B.sGlow);
+  gl.uniform1f(U.uThick, B.sThick);
+  gl.uniform1f(U.uThickLoud, B.sThickLoud);
+  gl.uniform1f(U.uCount, B.sCount);
+  gl.uniform1f(U.uAmp, B.sAmp);
+  gl.uniform1f(U.uWav, B.sWav);
+  gl.uniform1f(U.uHalo, B.sHalo);
+  gl.uniform1f(U.uLobe, B.sLobe);
+  gl.uniform1f(U.uSoft, B.sSoft);
+  gl.uniform1f(U.uMix, B.sMix);
+  gl.uniform1f(U.uWhite, B.sWhite);
+  gl.uniform1f(U.uAmpK, 1);
+  gl.uniform1f(U.uThickK, 1);
+  gl.uniform1f(U.uRainbow, B.sRainbow);
+  gl.uniform1f(U.uRimRefr, B.sRimRefr);
+  gl.uniform1f(U.uTip, B.sTip);
+  gl.uniform1f(U.uTaper, B.sTaper);
+  gl.uniform1f(U.uHue, B.sHue);
+  gl.uniform1f(U.uSat, B.sSat);
+  gl.uniform1f(U.uCore, B.sCore);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ---------- 交互 ----------
+// 整段时间轴按真机录屏：聆听 → 0.3s 压成胶囊 → 3.5s 后拉宽 → 3.2s 后展开回答
+let autoTimers = [], autoLoud = false; // autoLoud：自动演示期间聆听音量固定为 1
+function autoDemo() {
+  autoTimers.forEach(clearTimeout);
+  autoLoud = true;
+  const seq = [['idle', 0], ['listen', 700], ['think', 5400], ['work', 8900], ['answer', 12100], ['idle', 19000]];
+  autoTimers = seq.map(([s, ms]) => setTimeout(() => setState(s), ms));
+  autoTimers.push(setTimeout(() => autoLoud = false, 19000));
+}
+function syncOut(el) { el.nextElementSibling.textContent = (+el.value).toFixed(el.step === '1' ? 0 : 2); }
+const bandIds = BAND.filter(p => p.length > 1).map(p => p[0]);
+function showSet(i) {
+  editSet = i;
+  bandIds.forEach(id => { const el = document.getElementById(id); el.value = SETS[i][id]; syncOut(el); });
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', +b.dataset.set === i));
+}
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showSet(+b.dataset.set));
+document.querySelectorAll('input[type=range]').forEach(el => {
+  syncOut(el);
+  el.oninput = () => { syncOut(el); if (bandIds.includes(el.id)) SETS[editSet][el.id] = +el.value; };
+});
+showSet(0);
+copy.onclick = () => {
+  const o = {};
+  SETS.forEach((set, i) => { o[SET_NAMES[i]] = Object.fromEntries(BAND.filter(p => p.length > 1).map(p => [p[1], set[p[0]]])); });
+  o['折射'] = +sRefr.value;
+  o['灵动岛下移'] = +sIsland.value;
+  navigator.clipboard.writeText(JSON.stringify(o, null, 1)).then(() => { copy.textContent = '已复制'; setTimeout(() => copy.textContent = '复制参数', 1200); });
+};
+reset.onclick = () => { SETS[0] = defaults(0); SETS[1] = defaults(1); sRefr.value = 1.74; syncOut(sRefr); sIsland.value = 0; syncOut(sIsland); layoutDefaults(); resize(); showSet(editSet); };
+sLevel.addEventListener('input', () => { simOn = false; micOn = false; sim.classList.remove('on'); mic.classList.remove('on'); });
+document.querySelectorAll('#states button').forEach(b => b.onclick = () => { autoTimers.forEach(clearTimeout); autoLoud = false; setState(b.dataset.s); });
+auto.onclick = autoDemo;
+mic.onclick = toggleMic;
+sim.onclick = () => { simOn = !simOn; if (simOn) { micOn = false; mic.classList.remove('on'); } sim.classList.toggle('on', simOn); };
+bg.onclick = () => {
+  const keys = Object.keys(BGS).filter(k => textures[k]);
+  bgKey = keys[(keys.indexOf(bgKey) + 1) % keys.length];
+  bg.textContent = '背景：' + BGS[bgKey].label;
+};
+
+// 上传自己的手机截图：按 393×852 的比例居中裁切铺满。
+// iPhone 截图里不含灵动岛，所以不需要像录屏截帧那样抹掉原来的岛
+function loadCustom(f) {
+  if (!f || !f.type.startsWith('image/')) return;
+  const url = URL.createObjectURL(f), img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = 786; c.height = 1704;
+    const sc = Math.max(c.width / img.width, c.height / img.height), w = img.width * sc, h = img.height * sc;
+    c.getContext('2d').drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+    URL.revokeObjectURL(url);
+    if (textures.custom) gl.deleteTexture(textures.custom);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    textures.custom = tex;
+    BGS.custom = { label: '自定义' };
+    bgKey = 'custom'; bg.textContent = '背景：自定义';
+  };
+  img.src = url;
+}
+upload.onclick = () => file.click();
+file.onchange = () => { loadCustom(file.files[0]); file.value = ''; };
+const phoneEl = document.querySelector('.phone');
+phoneEl.addEventListener('dragover', e => e.preventDefault());
+phoneEl.addEventListener('drop', e => { e.preventDefault(); loadCustom(e.dataTransfer.files[0]); });
+layoutDefaults(); resize();
+sPhoneW.addEventListener('input', resize);
+sPhoneY.addEventListener('input', resize);
+frameBtn.onclick = () => frameBtn.classList.toggle('on', !document.querySelector('.phone').classList.toggle('frameless'));
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); autoDemo(); }
+  if (e.key === 'h' || e.key === 'H') { document.body.classList.toggle('clean'); resize(); }
+});
+
+Promise.all(Object.keys(BGS).map(loadBg)).then(() => {
+  // 纯黑背景：光效最干净，适合录 Siri 特写
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+  textures.black = tex; BGS.black = { label: '纯黑' };
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>
